@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>烟幕干扰仿真（3D+2D）</title>
+  <meta name="description" content="2025 年全国大学生数学建模竞赛 A 题「烟幕干扰弹的投放策略」交互式 3D/2D 仿真可视化，纯前端单页，可离线运行。" />
+  <script src="assets/plotly-2.30.0.min.js"></script>
+  <style>
+    body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    .container { display: grid; grid-template-columns: 360px 1fr; grid-template-rows: auto 1fr auto auto; height: 100vh; }
+    .sidebar { padding: 12px 14px; border-right: 1px solid #eee; overflow: auto; }
+    .charts { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; gap: 6px; padding: 6px; background: #fafafa; }
+    .chart { background: #fff; border: 1px solid #eee; border-radius: 6px; min-height: 220px; }
+    .footer { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid #eee; }
+    .footer-show { padding: 8px 12px; border-top: 1px solid #eee; background: #f8f9fa; max-height: 120px; overflow-y: auto; }
+    fieldset { margin-bottom: 10px; }
+    legend { font-weight: bold; }
+    label { display: inline-block; margin: 4px 0; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .small { font-size: 12px; color: #666; }
+    .uav-panel { border: 1px solid #ddd; border-radius: 6px; padding: 8px; margin: 8px 0; }
+    .bomb-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 4px 0; }
+    .toggle { margin-right: 8px; }
+    button { cursor: pointer; }
+    input[type="number"] { width: 100%; box-sizing: border-box; }
+    .obstruction-list { margin-top: 8px; }
+    .obstruction-item { margin: 2px 0; padding: 4px 8px; background: #e8f4f8; border-radius: 4px; font-size: 12px; }
+    .current-status { font-weight: bold; color: #d9534f; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <fieldset>
+        <legend>实体选择</legend>
+        <div>
+          <div><strong>导弹（可多选）</strong></div>
+          <label><input type="checkbox" class="missile-ck" value="M1" checked /> M1 (20000, 0, 2000)</label><br/>
+          <label><input type="checkbox" class="missile-ck" value="M2" /> M2 (19000, 600, 2100)</label><br/>
+          <label><input type="checkbox" class="missile-ck" value="M3" /> M3 (18000, -600, 1900)</label>
+        </div>
+        <hr/>
+        <div>
+          <div><strong>无人机（可多选）</strong></div>
+          <label><input type="checkbox" class="uav-ck" value="FY1" checked /> FY1 (17800, 0, 1800)</label><br/>
+          <label><input type="checkbox" class="uav-ck" value="FY2" /> FY2 (12000, 1400, 1400)</label><br/>
+          <label><input type="checkbox" class="uav-ck" value="FY3" /> FY3 (6000, -3000, 700)</label><br/>
+          <label><input type="checkbox" class="uav-ck" value="FY4" /> FY4 (11000, 2000, 1800)</label><br/>
+          <label><input type="checkbox" class="uav-ck" value="FY5" /> FY5 (13000, -2000, 1300)</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>无人机参数与烟雾弹</legend>
+        <div id="uav-config-panels"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>显示选项</legend>
+        <label class="toggle"><input type="checkbox" id="show-los" checked /> 显示导弹→目标视线</label><br/>
+        <label class="toggle"><input type="checkbox" id="show-trails" checked /> 显示轨迹</label><br/>
+        <label class="toggle"><input type="checkbox" id="show-smoke" checked /> 显示烟雾</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>时间设置</legend>
+        <div class="row">
+          <label>总时长(s)：<input id="duration" type="number" value="40" min="5" max="120" step="1" /></label>
+          <label>步长(s)：<input id="dt" type="number" value="0.1" min="0.01" max="1" step="0.01" /></label>
+        </div>
+        <div class="small">建议总时长 ≥ (最后一次起爆 + 20s)；步长越小动画越平滑。</div>
+      </fieldset>
+
+      <div class="row">
+        <button id="apply">初始化/应用设置</button>
+        <button id="reset">重置</button>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div id="plot3d" class="chart"></div>
+      <div id="plotXY" class="chart"></div>
+      <div id="plotXZ" class="chart"></div>
+      <div id="plotYZ" class="chart"></div>
+    </div>
+
+    <div class="footer">
+      <button id="play">播放</button>
+      <button id="pause" disabled>暂停</button>
+      <input id="timeRange" type="range" min="0" max="400" step="1" value="0" style="flex:1;" />
+      <label>时间(s): <input id="timeInput" type="number" value="0.0" min="0" step="0.1" style="width: 80px;" /></label>
+      <span id="statusLabel" class="small"></span>
+    </div>
+
+    <div class="footer-show">
+      <div class="current-status" id="currentObstruction">当前遮挡情况: 计算中...</div>
+      <div class="obstruction-list" id="obstructionList">
+        <div class="small">遮挡时间段列表:</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---------------- 常量与初始参数（硬编码自题面） ----------------
+    const TARGET_CENTER = [0.0, 200.0, 5.0];
+    const TARGET_RADIUS = 7.0;
+    const TARGET_HEIGHT = 10.0;
+    const CLOUD_RADIUS = 10.0;
+    const CLOUD_SINK_SPEED = 3.0;
+    const CLOUD_EFFECTIVE_DURATION = 20.0;
+    const MISSILE_SPEED = 300.0;
+    const UAV_SPEED_MIN = 70.0;
+    const UAV_SPEED_MAX = 140.0;
+    const G = 9.8;
+
+    const MISSILES = {
+      M1: { id: 'M1', pos: [20000,    0, 2000], color: 'red'   },
+      M2: { id: 'M2', pos: [19000,  600, 2100], color: 'orange'},
+      M3: { id: 'M3', pos: [18000, -600, 1900], color: 'tomato'}
+    };
+    const UAVS = {
+      FY1: { id: 'FY1', pos: [17800,     0, 1800], color: 'blue' },
+      FY2: { id: 'FY2', pos: [12000,  1400, 1400], color: 'royalblue' },
+      FY3: { id: 'FY3', pos: [ 6000, -3000,  700], color: 'steelblue' },
+      FY4: { id: 'FY4', pos: [11000,  2000, 1800], color: 'teal' },
+      FY5: { id: 'FY5', pos: [13000, -2000, 1300], color: 'navy' }
+    };
+    const ORIGIN = [0,0,0];
+
+    // 取样密度（与 Python 基本一致，略微降低以提升性能）
+    const NUM_CIRCLE_POINTS = 72;
+    const NUM_SIDE_POINTS = 20;
+
+    // ---------------- 工具函数 ----------------
+    function vecAdd(a,b){ return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+    function vecSub(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+    function vecScale(a,s){ return [a[0]*s, a[1]*s, a[2]*s]; }
+    function dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+    function norm(a){ return Math.hypot(a[0], a[1], a[2]); }
+    function norm2D(a){ return Math.hypot(a[0], a[1]); }
+    function unit(v){ const n=norm(v)||1e-9; return [v[0]/n, v[1]/n, v[2]/n]; }
+    function toRad(deg){ return deg*Math.PI/180; }
+
+    function towards(origin, dest, level=true){
+      let v = vecSub(dest, origin);
+      if(level) v[2] = 0;
+      return unit(v);
+    }
+
+    // 目标顶部/底部圆周关键点（预计算）
+    const TARGET_Z_BOTTOM = TARGET_CENTER[2] - TARGET_HEIGHT/2;
+    const TARGET_Z_TOP    = TARGET_CENTER[2] + TARGET_HEIGHT/2;
+    const circleAngles = Array.from({length: NUM_CIRCLE_POINTS}, (_,i)=> i*2*Math.PI/NUM_CIRCLE_POINTS);
+    const PRECOMP_CIRCLE_POINTS = (() => {
+      const top = circleAngles.map(a => [TARGET_CENTER[0] + TARGET_RADIUS*Math.cos(a),
+                                         TARGET_CENTER[1] + TARGET_RADIUS*Math.sin(a),
+                                         TARGET_Z_TOP]);
+      const bot = circleAngles.map(a => [TARGET_CENTER[0] + TARGET_RADIUS*Math.cos(a),
+                                         TARGET_CENTER[1] + TARGET_RADIUS*Math.sin(a),
+                                         TARGET_Z_BOTTOM]);
+      return top.concat(bot);
+    })();
+
+    function getDynamicSidePoints(missilePos){
+      const mxy = [missilePos[0], missilePos[1]];
+      const txy = [TARGET_CENTER[0], TARGET_CENTER[1]];
+      const vmt = [txy[0]-mxy[0], txy[1]-mxy[1]];
+      const d = norm2D(vmt);
+      // 防御性处理
+      if (d <= TARGET_RADIUS+1e-6){
+        // 返回空或退化为目标边缘两条竖线
+        const zList = Array.from({length: NUM_SIDE_POINTS}, (_,i)=> TARGET_Z_BOTTOM + (TARGET_Z_TOP-TARGET_Z_BOTTOM)*i/(NUM_SIDE_POINTS-1));
+        const p = [TARGET_CENTER[0] + TARGET_RADIUS, TARGET_CENTER[1]];
+        const q = [TARGET_CENTER[0] - TARGET_RADIUS, TARGET_CENTER[1]];
+        const s1 = zList.map(z => [p[0], p[1], z]);
+        const s2 = zList.map(z => [q[0], q[1], z]);
+        return s1.concat(s2);
+      }
+      const alpha = Math.asin(TARGET_RADIUS / d);
+      const beta = Math.atan2(vmt[1], vmt[0]);
+      const t1 = beta - alpha;
+      const t2 = beta + alpha;
+      const tp1 = [ txy[0] + TARGET_RADIUS*Math.cos(t1), txy[1] + TARGET_RADIUS*Math.sin(t1) ];
+      const tp2 = [ txy[0] + TARGET_RADIUS*Math.cos(t2), txy[1] + TARGET_RADIUS*Math.sin(t2) ];
+      const zList = Array.from({length: NUM_SIDE_POINTS}, (_,i)=> TARGET_Z_BOTTOM + (TARGET_Z_TOP-TARGET_Z_BOTTOM)*i/(NUM_SIDE_POINTS-1));
+      const s1 = zList.map(z => [tp1[0], tp1[1], z]);
+      const s2 = zList.map(z => [tp2[0], tp2[1], z]);
+      return s1.concat(s2);
+    }
+
+    function closestDistancePointToSegment(p, a, b){
+      // p到线段ab的最短距离（三维）
+      const ab = vecSub(b,a);
+      const ap = vecSub(p,a);
+      const ab2 = dot(ab,ab) || 1e-9;
+      let t = dot(ap,ab)/ab2;
+      t = Math.max(0, Math.min(1, t));
+      const proj = vecAdd(a, vecScale(ab, t));
+      return norm(vecSub(p, proj));
+    }
+
+    // ---------------- UI：无人机面板生成 ----------------
+    const uavPanelsRoot = document.getElementById('uav-config-panels');
+    const uavCheckboxes = Array.from(document.querySelectorAll('.uav-ck'));
+    const missileCheckboxes = Array.from(document.querySelectorAll('.missile-ck'));
+    function rebuildUavPanels(){
+      uavPanelsRoot.innerHTML = '';
+      uavCheckboxes.filter(ck => ck.checked).forEach(ck => {
+        const uav = UAVS[ck.value];
+        const div = document.createElement('div');
+        div.className = 'uav-panel';
+        div.dataset.uav = uav.id;
+        div.innerHTML = `
+          <div><strong>${uav.id}</strong> 初始位置 ${uav.pos.join(', ')} | 颜色 ${uav.color}</div>
+          <div class="row">
+            <label>速度(m/s)：<input type="number" class="spd" min="${UAV_SPEED_MIN}" max="${UAV_SPEED_MAX}" step="0.01" value="120.0"></label>
+            <label>航向(°)：<input type="number" class="yaw" min="-180" max="180" step="0.01" value="auto"></label>
+          </div>
+          <div class="small">航向相对+X轴，逆时针为正；填"auto"表示朝向假目标(0,0,0)且等高飞行。</div>
+          <div class="row">
+            <label>烟雾弹数量(1~3)：<input type="number" class="bomb-count" min="1" max="3" step="1" value="1"></label>
+          </div>
+          <div class="bombs"></div>
+        `;
+        uavPanelsRoot.appendChild(div);
+        // 初始生成1个烟雾弹配置
+        buildBombRows(div, 1);
+        // 绑定数量变化
+        div.querySelector('.bomb-count').addEventListener('change', (e)=>{
+          let n = parseInt(e.target.value||'1',10);
+          n = Math.max(1, Math.min(3, n));
+          e.target.value = n;
+          buildBombRows(div, n);
+        });
+      });
+    }
+    function buildBombRows(panel, n){
+      const bombsDiv = panel.querySelector('.bombs');
+      bombsDiv.innerHTML = '';
+      for(let i=0;i<n;i++){
+        const row = document.createElement('div');
+        row.className = 'bomb-row';
+        // 默认：第一个投放1.5s，引爆延迟3.6s；后续可自行设置
+        const defaultDrop = i===0 ? 1.5 : (1.5 + i*1.0);
+        const defaultDelay = 3.6;
+        row.innerHTML = `
+          <label>投放时刻t(s)：<input type="number" class="drop" min="0" max="120" step="0.01" value="${defaultDrop.toFixed(2)}"></label>
+          <label>引爆延迟(s)：<input type="number" class="delay" min="0" max="20" step="0.01" value="${defaultDelay.toFixed(2)}"></label>
+        `;
+        bombsDiv.appendChild(row);
+      }
+    }
+    uavCheckboxes.forEach(ck => ck.addEventListener('change', rebuildUavPanels));
+    rebuildUavPanels();
+
+    // ---------------- 仿真状态 ----------------
+    let sim = {
+      duration: 40,
+      dt: 0.1,
+      time: 0,
+      timer: null,
+      missiles: [], // {id,color,pos0,dir}
+      uavs: [],     // {id,color,pos0,dirUav,speed,bombs:[{drop,delay,dropPos,explodePos,explodeTime}]}
+      showLOS: true,
+      showTrails: true,
+      showSmoke: true
+    };
+
+    // ---------------- 初始化与应用 ----------------
+    document.getElementById('apply').addEventListener('click', ()=>{
+      applySettings();
+      initPlots();
+      updateAtTime(0);
+    });
+    document.getElementById('reset').addEventListener('click', ()=>{
+      // 重置为默认（FY1+M1）
+      document.querySelectorAll('.missile-ck').forEach(ck => ck.checked = (ck.value==='M1'));
+      document.querySelectorAll('.uav-ck').forEach(ck => ck.checked = (ck.value==='FY1'));
+      rebuildUavPanels();
+      document.getElementById('duration').value = 40;
+      document.getElementById('dt').value = 0.1;
+      document.getElementById('show-los').checked = true;
+      document.getElementById('show-trails').checked = true;
+      document.getElementById('show-smoke').checked = true;
+      applySettings();
+      initPlots();
+      updateAtTime(0);
+    });
+
+    function applySettings(){
+      const duration = parseFloat(document.getElementById('duration').value||'40');
+      const dt = parseFloat(document.getElementById('dt').value||'0.1');
+      sim.duration = Math.max(5, Math.min(120, duration));
+      sim.dt = Math.max(0.01, Math.min(1, dt));
+      sim.time = 0;
+      sim.showLOS = document.getElementById('show-los').checked;
+      sim.showTrails = document.getElementById('show-trails').checked;
+      sim.showSmoke = document.getElementById('show-smoke').checked;
+
+      // 导弹
+      sim.missiles = missileCheckboxes.filter(ck=>ck.checked).map(ck=>{
+        const m = MISSILES[ck.value];
+        const dir = unit(vecSub(ORIGIN, m.pos)); // 朝向假目标
+        return { id:m.id, color:m.color, pos0:[...m.pos], dir:dir };
+      });
+
+      // 无人机与烟雾弹
+      sim.uavs = [];
+      document.querySelectorAll('.uav-panel').forEach(panel=>{
+        const id = panel.dataset.uav;
+        const uav = UAVS[id];
+        let spd = parseFloat(panel.querySelector('.spd').value||'120');
+        spd = Math.max(UAV_SPEED_MIN, Math.min(UAV_SPEED_MAX, spd));
+        let yawInput = panel.querySelector('.yaw').value;
+        let dirUav;
+        if (yawInput.toString().toLowerCase()==='auto'){
+          dirUav = towards(uav.pos, ORIGIN, true);
+        }else{
+          const yaw = toRad(parseFloat(yawInput||'0')); // 相对+X轴，逆时针为正
+          dirUav = [Math.cos(yaw), Math.sin(yaw), 0];
+          dirUav = unit(dirUav);
+        }
+        const bombCount = parseInt(panel.querySelector('.bomb-count').value||'1',10);
+        const bombs = [];
+        const bombRows = panel.querySelectorAll('.bomb-row');
+        bombRows.forEach((row, i)=>{
+          const drop = parseFloat(row.querySelector('.drop').value||'0');
+          const delay= parseFloat(row.querySelector('.delay').value||'0');
+          // 投放位置：u0 + v_uav * drop
+          const vU = vecScale(dirUav, spd);
+          const dropPos = vecAdd(uav.pos, vecScale(vU, drop));
+          // 引爆位置：dropPos + vU * delay，z下降 0.5 g delay^2
+          const explodePos = vecAdd(dropPos, vecScale(vU, delay));
+          explodePos[2] = explodePos[2] - 0.5*G*delay*delay;
+          const explodeTime = drop + delay;
+          bombs.push({ drop, delay, dropPos, explodePos, explodeTime });
+        });
+        sim.uavs.push({ id:id, color:uav.color, pos0:[...uav.pos], dirUav, speed:spd, bombs });
+      });
+
+      // 时间范围条
+      const steps = Math.max(1, Math.floor(sim.duration/sim.dt));
+      const range = document.getElementById('timeRange');
+      range.min = 0;
+      range.max = steps;
+      range.step = 1;
+      range.value = 0;
+      document.getElementById('timeInput').value = '0.0';
+      document.getElementById('timeInput').max = sim.duration;
+      setStatus('');
+      
+      // 预计算遮挡时间段
+      setTimeout(() => {
+        precomputeObstructionPeriods();
+      }, 100);
+    }
+
+    // ---------------- 绘图初始化 ----------------
+    let fig3dTraces = { target: [], missiles: [], uavs: [], bombs: [], smoke: [], losVisible: [], losHidden: [] };
+    let fig2d = { XY:null, XZ:null, YZ:null };
+
+    function initPlots(){
+      // 3D：构建目标圆柱（线框）
+      const target3dTraces = [];
+      const theta = Array.from({length: 50}, (_,i)=> i*2*Math.PI/50);
+      const xC = theta.map(a => TARGET_CENTER[0] + TARGET_RADIUS*Math.cos(a));
+      const yC = theta.map(a => TARGET_CENTER[1] + TARGET_RADIUS*Math.sin(a));
+      const zBot = TARGET_Z_BOTTOM, zTop = TARGET_Z_TOP;
+
+      target3dTraces.push({
+        type:'scatter3d', mode:'lines',
+        x:xC, y:yC, z:theta.map(()=>zBot),
+        line:{color:'green', width:2}, name:'目标底面', showlegend:true
+      });
+      target3dTraces.push({
+        type:'scatter3d', mode:'lines',
+        x:xC, y:yC, z:theta.map(()=>zTop),
+        line:{color:'green', width:2}, name:'目标顶面', showlegend:false
+      });
+      for(let i=0; i<theta.length; i+=10){
+        target3dTraces.push({
+          type:'scatter3d', mode:'lines',
+          x:[xC[i], xC[i]], y:[yC[i], yC[i]], z:[zBot, zTop],
+          line:{color:'green', width:1}, name:'目标侧边', showlegend:false
+        });
+      }
+
+      // 3D：导弹/无人机/烟雾弹/烟雾球（动态占位）
+      const dynamicTraces = [];
+      // 为每个导弹建2条trace：当前点、轨迹
+      const missilesTraces = [];
+      sim.missiles.forEach(m=>{
+        missilesTraces.push(
+          {type:'scatter3d', mode:'markers', x:[], y:[], z:[], marker:{size:4, color:m.color}, name:`${m.id}`, showlegend:true},
+          {type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{width:2, color:m.color}, name:`${m.id}轨迹`, showlegend:false}
+        );
+      });
+      // 为每个无人机建点/轨迹、以及其烟雾弹点与轨迹
+      const uavTraces = [];
+      const bombTraces = [];
+      sim.uavs.forEach(u=>{
+        uavTraces.push(
+          {type:'scatter3d', mode:'markers', x:[], y:[], z:[], marker:{size:4, color:u.color, symbol:'square'}, name:`${u.id}`, showlegend:true},
+          {type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{width:2, color:u.color}, name:`${u.id}轨迹`, showlegend:false}
+        );
+        // 每个烟雾弹：一个点(飞行阶段)、一条轨迹(虚线)
+        u.bombs.forEach((b, bi)=>{
+          bombTraces.push(
+            {type:'scatter3d', mode:'markers', x:[], y:[], z:[], marker:{size:3, color:'purple', symbol:'diamond'}, name:`${u.id}-B${bi+1}`, showlegend: (bi===0)},
+            {type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{width:1.5, color:'purple', dash:'dot'}, name:`${u.id}-B${bi+1}轨迹`, showlegend:false}
+          );
+        });
+      });
+      // 烟雾球线框：每个烟雾弹 3 个正交圆圈（x-y/y-z/x-z）共3条线
+      const smokeTraces = [];
+      sim.uavs.forEach(u=>{
+        u.bombs.forEach((b, bi)=>{
+          // 3 orthogonal great circles
+          for(let k=0; k<3; k++){
+            smokeTraces.push(
+              {type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{color:'gray', width:3}, name: (k===0? `${u.id}-B${bi+1}烟雾` : undefined), opacity:0.7, showlegend:(k===0)}
+            );
+          }
+        });
+      });
+      // 视线：两条trace（可见=红，不可见=绿），多段线通过null分段
+      const losVisible = [{type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{color:'red', width:1}, name:'可见视线', showlegend:true}];
+      const losHidden  = [{type:'scatter3d', mode:'lines', x:[], y:[], z:[], line:{color:'lime', width:2}, name:'遮蔽视线', showlegend:true}];
+
+      const data3d = [
+        ...target3dTraces,
+        ...missilesTraces,
+        ...uavTraces,
+        ...bombTraces,
+        ...smokeTraces,
+        ...losVisible,
+        ...losHidden
+      ];
+
+      Plotly.newPlot('plot3d', data3d, {
+        scene: {
+          xaxis:{range:[-1000,21000], title:'X(m)'},
+          yaxis:{range:[-4000,4000],  title:'Y(m)'},
+          zaxis:{range:[   -100,2100],title:'Z(m)'}
+        },
+        margin:{l:0,r:0,t:20,b:0},
+        showlegend:true
+      }, {responsive:true});
+
+      fig3dTraces.target = target3dTraces.length;
+      fig3dTraces.missiles = missilesTraces.length;
+      fig3dTraces.uavs = uavTraces.length;
+      fig3dTraces.bombs = bombTraces.length;
+      fig3dTraces.smoke = smokeTraces.length;
+      fig3dTraces.losVisible = 1;
+      fig3dTraces.losHidden = 1;
+
+      // 2D 子图：XY / XZ / YZ
+      init2D('plotXY', 'X(m)', 'Y(m)');
+      init2D('plotXZ', 'X(m)', 'Z(m)');
+      init2D('plotYZ', 'Y(m)', 'Z(m)');
+    }
+
+    function init2D(divId, xTitle, yTitle){
+      Plotly.newPlot(divId, [], {
+        xaxis:{title:xTitle, range: (xTitle.startsWith('X')||xTitle.startsWith('Y'))?[ -1000,21000 ]:[ -4000,4000 ]},
+        yaxis:{title:yTitle, range:[ (yTitle.startsWith('Z')?-100:-4000), (yTitle.startsWith('Z')?2100:4000) ]},
+        margin:{l:45,r:10,t:10,b:35},
+        showlegend:false,
+        shapes: []
+      }, {responsive:true});
+      if(divId==='plotXY') fig2d.XY = document.getElementById(divId);
+      if(divId==='plotXZ') fig2d.XZ = document.getElementById(divId);
+      if(divId==='plotYZ') fig2d.YZ = document.getElementById(divId);
+
+      // 画目标轮廓
+      if(divId==='plotXY'){
+        addCircleShape(fig2d.XY, TARGET_CENTER[0], TARGET_CENTER[1], TARGET_RADIUS, 'green', 2, 0);
+      }else{
+        // 矩形投影（XZ/YZ），用线trace简化
+        const rect = rectOutlinePoints(divId==='plotXZ' ? [TARGET_CENTER[0]-TARGET_RADIUS, TARGET_Z_BOTTOM] : [TARGET_CENTER[1]-TARGET_RADIUS, TARGET_Z_BOTTOM],
+                                       2*TARGET_RADIUS, TARGET_HEIGHT, 30);
+        Plotly.addTraces(divId, [{type:'scatter', mode:'lines', x:rect.x, y:rect.y, line:{color:'green', width:2}}]);
+      }
+    }
+    function rectOutlinePoints(origin, w, h, N){
+      const [x0, y0] = origin;
+      const pts = [];
+      for(let i=0;i<=N;i++) pts.push([x0 + w*i/N, y0]);
+      for(let i=0;i<=N;i++) pts.push([x0 + w, y0 + h*i/N]);
+      for(let i=0;i<=N;i++) pts.push([x0 + w - w*i/N, y0 + h]);
+      for(let i=0;i<=N;i++) pts.push([x0, y0 + h - h*i/N]);
+      return { x: pts.map(p=>p[0]), y: pts.map(p=>p[1]) };
+    }
+    function addCircleShape(fig, cx, cy, r, color='gray', width=1, opacity=0.2, fillcolor='rgba(128,128,128,0.2)'){
+      const layout = fig.layout;
+      layout.shapes = layout.shapes || [];
+      layout.shapes.push({
+        type:'circle',
+        xref:'x', yref:'y',
+        x0: cx - r, x1: cx + r,
+        y0: cy - r, y1: cy + r,
+        line:{color:color, width:width},
+        fillcolor: fillcolor,
+        opacity: opacity
+      });
+      Plotly.relayout(fig, {shapes: layout.shapes});
+    }
+
+    // ---------------- 时间控制 ----------------
+    const playBtn = document.getElementById('play');
+    const pauseBtn = document.getElementById('pause');
+    const timeRange = document.getElementById('timeRange');
+    const timeInput = document.getElementById('timeInput');
+
+    playBtn.addEventListener('click', ()=>{
+      playBtn.disabled = true;
+      pauseBtn.disabled = false;
+      if(sim.timer) clearInterval(sim.timer);
+      sim.timer = setInterval(()=>{
+        sim.time += sim.dt;
+        if(sim.time > sim.duration){
+          sim.time = sim.duration;
+          clearInterval(sim.timer); sim.timer=null;
+          playBtn.disabled = false; pauseBtn.disabled = true;
+        }
+        const idx = Math.round(sim.time/sim.dt);
+        timeRange.value = idx;
+        timeInput.value = sim.time.toFixed(2);
+        updateAtTime(sim.time);
+      }, 100);
+    });
+    pauseBtn.addEventListener('click', ()=>{
+      if(sim.timer){ clearInterval(sim.timer); sim.timer=null; }
+      playBtn.disabled = false; pauseBtn.disabled = true;
+    });
+    timeRange.addEventListener('input', ()=>{
+      const idx = parseInt(timeRange.value,10);
+      const t = idx * sim.dt;
+      sim.time = t;
+      timeInput.value = t.toFixed(2);
+      updateAtTime(t);
+    });
+    timeInput.addEventListener('change', ()=>{
+      let t = parseFloat(timeInput.value || '0');
+      t = Math.max(0, Math.min(sim.duration, t));
+      sim.time = t;
+      timeInput.value = t.toFixed(2);
+      const idx = Math.round(t / sim.dt);
+      timeRange.value = idx;
+      updateAtTime(t);
+    });
+
+    // ---------------- 全局变量新增 ----------------
+    let obstructionPeriods = []; // 存储所有遮挡时间段
+
+    // ---------------- 预计算遮挡时间段 ----------------
+    function precomputeObstructionPeriods() {
+      obstructionPeriods = [];
+      const timePoints = [];
+      for(let t = 0; t <= sim.duration; t += sim.dt) {
+        timePoints.push(t);
+      }
+      
+      sim.missiles.forEach(missile => {
+        const missileObstructions = [];
+        let currentPeriod = null;
+        
+        timePoints.forEach(t => {
+          const smokeCenters = gatherActiveSmokes(t);
+          const missilePos = missilePosAt(missile, t);
+          const los = computeLOSForMissile(missilePos, smokeCenters);
+          
+          if(los.fully) {
+            if(currentPeriod === null) {
+              currentPeriod = { start: t, end: t, missile: missile.id };
+            }
+            currentPeriod.end = t;
+          } else {
+            if(currentPeriod !== null) {
+              if(currentPeriod.end - currentPeriod.start >= sim.dt) {
+                missileObstructions.push(currentPeriod);
+              }
+              currentPeriod = null;
+            }
+          }
+        });
+        
+        // 处理最后一个时间段
+        if(currentPeriod !== null) {
+          if(currentPeriod.end - currentPeriod.start >= sim.dt) {
+            missileObstructions.push(currentPeriod);
+          }
+        }
+        
+        obstructionPeriods.push(...missileObstructions);
+      });
+      
+      // 按开始时间排序
+      obstructionPeriods.sort((a, b) => a.start - b.start);
+      
+      // 更新显示
+      updateObstructionDisplay();
+      // 预计算完成后同步当前时刻的遮挡状态，避免停留在“计算中/无遮挡”
+      updateCurrentObstructionStatus(sim.time);
+    }
+
+    function updateObstructionDisplay() {
+      const listDiv = document.getElementById('obstructionList');
+      listDiv.innerHTML = '<div class="small">遮挡时间段列表:</div>';
+      
+      if(obstructionPeriods.length === 0) {
+        listDiv.innerHTML += '<div class="obstruction-item">无遮挡时间段</div>';
+        return;
+      }
+      
+      obstructionPeriods.forEach((period, index) => {
+        const duration = period.end - period.start;
+        const item = document.createElement('div');
+        item.className = 'obstruction-item';
+        item.textContent = `${period.missile}: ${period.start.toFixed(3)}s - ${period.end.toFixed(3)}s (持续${duration.toFixed(3)}s)`;
+        listDiv.appendChild(item);
+      });
+    }
+
+    function updateCurrentObstructionStatus(t) {
+      const currentDiv = document.getElementById('currentObstruction');
+      const currentObstructions = obstructionPeriods.filter(period => 
+        t >= period.start && t <= period.end
+      );
+      
+      if(currentObstructions.length === 0) {
+        currentDiv.textContent = '当前遮挡情况: 无遮挡';
+        currentDiv.style.color = '#5cb85c';
+      } else {
+        const missiles = currentObstructions.map(p => p.missile).join(', ');
+        currentDiv.textContent = `当前遮挡情况: ${missiles} 被遮挡`;
+        currentDiv.style.color = '#d9534f';
+      }
+    }
+
+    // ---------------- 位置计算 ----------------
+    function missilePosAt(m, t){ return vecAdd(m.pos0, vecScale(m.dir, MISSILE_SPEED*t)); }
+    function uavPosAt(u, t){ return vecAdd(u.pos0, vecScale(u.dirUav, u.speed*t)); }
+
+    function bombStateAt(u, b, t){
+      // 返回 { bombActive, bombPos, smokeActive, smokeCenter }
+      const vU = vecScale(u.dirUav, u.speed);
+      let bombActive=false, bombPos=null, smokeActive=false, smokeCenter=null;
+      if(t >= b.drop && t < b.explodeTime){
+        bombActive = true;
+        const ft = t - b.drop;
+        bombPos = vecAdd(b.dropPos, vecScale(vU, ft));
+        bombPos[2] = bombPos[2] - 0.5*G*ft*ft;
+      }
+      if(t >= b.explodeTime){
+        const sink = t - b.explodeTime;
+        if(sink <= CLOUD_EFFECTIVE_DURATION){
+          smokeActive = true;
+          smokeCenter = [ b.explodePos[0], b.explodePos[1], b.explodePos[2] - CLOUD_SINK_SPEED * sink ];
+        }
+      }
+      return {bombActive, bombPos, smokeActive, smokeCenter};
+    }
+
+    // ---------------- 视线/遮蔽计算与绘制数据 ----------------
+    function computeLOSForMissile(missilePos, smokeCenters){
+      // 构造目标关键点
+      const sidePts = getDynamicSidePoints(missilePos);
+      const allPts = PRECOMP_CIRCLE_POINTS.concat(sidePts);
+
+      // 组装可见/被遮蔽线段（多段line通过null分段）
+      const vis = { x:[], y:[], z:[] };
+      const hid = { x:[], y:[], z:[] };
+      let obscuredCount = 0;
+
+      for(const tp of allPts){
+        let covered = false;
+        for(const sc of smokeCenters){
+          const d = closestDistancePointToSegment(sc, missilePos, tp);
+          if(d <= CLOUD_RADIUS){ covered = true; break; }
+        }
+        const tgt = tp;
+        const arr = covered ? hid : vis;
+        arr.x.push(missilePos[0], tgt[0], null);
+        arr.y.push(missilePos[1], tgt[1], null);
+        arr.z.push(missilePos[2], tgt[2], null);
+        if(covered) obscuredCount++;
+      }
+      const fully = (obscuredCount === allPts.length) && allPts.length>0;
+      return { vis, hid, fully, total: allPts.length, obscured: obscuredCount };
+    }
+
+    function gatherActiveSmokes(t){
+      const centers=[];
+      sim.uavs.forEach(u=>{
+        u.bombs.forEach(b=>{
+          const st = bombStateAt(u,b,t);
+          if(st.smokeActive && sim.showSmoke){
+            centers.push(st.smokeCenter);
+          }
+        });
+      });
+      return centers;
+    }
+
+    function updateAtTime(t){
+      sim.time = t;
+      timeInput.value = t.toFixed(2);
+      // 3D：更新导弹/无人机/炸弹点与轨迹
+      const updates = { x:[], y:[], z:[], traces:[] };
+      let traceIndex = 0;
+      // 跳过目标固定trace数量
+      traceIndex += fig3dTraces.target;
+
+      // 导弹
+      sim.missiles.forEach(m=>{
+        const p = missilePosAt(m, t);
+        // 点
+        updates.x.push([p[0]]);
+        updates.y.push([p[1]]);
+        updates.z.push([p[2]]);
+        updates.traces.push(traceIndex++);
+        // 轨迹（可选）
+        const trailN = Math.max(2, Math.floor(t/Math.max(0.01, sim.dt)));
+        const xs=[], ys=[], zs=[];
+        if(sim.showTrails){
+          for(let i=0;i<trailN;i++){
+            const ti = i*Math.max(0.01, sim.dt);
+            const pi = missilePosAt(m, ti);
+            xs.push(pi[0]); ys.push(pi[1]); zs.push(pi[2]);
+          }
+        }
+        updates.x.push(xs); updates.y.push(ys); updates.z.push(zs);
+        updates.traces.push(traceIndex++);
+      });
+
+      // 无人机+炸弹
+      sim.uavs.forEach(u=>{
+        const pu = uavPosAt(u, t);
+        // UAV点
+        updates.x.push([pu[0]]); updates.y.push([pu[1]]); updates.z.push([pu[2]]);
+        updates.traces.push(traceIndex++);
+        // UAV轨迹
+        const xs=[], ys=[], zs=[];
+        if(sim.showTrails){
+          const trailN = Math.max(2, Math.floor(t/Math.max(0.01, sim.dt)));
+          for(let i=0;i<trailN;i++){
+            const ti = i*Math.max(0.01, sim.dt);
+            const pi = uavPosAt(u, ti);
+            xs.push(pi[0]); ys.push(pi[1]); zs.push(pi[2]);
+          }
+        }
+        updates.x.push(xs); updates.y.push(ys); updates.z.push(zs);
+        updates.traces.push(traceIndex++);
+
+        // 炸弹点与轨迹
+        u.bombs.forEach(b=>{
+          const st = bombStateAt(u,b,t);
+          // 炸弹点
+          updates.x.push(st.bombActive ? [st.bombPos[0]] : []);
+          updates.y.push(st.bombActive ? [st.bombPos[1]] : []);
+          updates.z.push(st.bombActive ? [st.bombPos[2]] : []);
+          updates.traces.push(traceIndex++);
+          // 炸弹轨迹（从drop到min(t, explode)）
+          let xs=[], ys=[], zs=[];
+          if(sim.showTrails){
+            const vU = vecScale(u.dirUav, u.speed);
+            const t0 = b.drop, t1 = Math.min(t, b.explodeTime);
+            if(t1>t0){
+              const N = Math.max(5, Math.floor((t1-t0)/Math.max(0.01, sim.dt)));
+              for(let i=0;i<=N;i++){
+                const ti = t0 + (t1-t0)*i/N;
+                const ft = ti - b.drop;
+                let p = vecAdd(b.dropPos, vecScale(vU, ft));
+                p[2] = p[2] - 0.5*G*ft*ft;
+                xs.push(p[0]); ys.push(p[1]); zs.push(p[2]);
+              }
+            }
+          }
+          updates.x.push(xs); updates.y.push(ys); updates.z.push(zs);
+          updates.traces.push(traceIndex++);
+        });
+      });
+
+      // 烟雾球（线框三大圆）
+      const smokeCenters = [];
+      sim.uavs.forEach(u=>{
+        u.bombs.forEach(b=>{
+          const st = bombStateAt(u,b,t);
+          if(st.smokeActive && sim.showSmoke){
+            smokeCenters.push(st.smokeCenter);
+          }
+        });
+      });
+      // 每个烟雾添加3条正交大圆
+      const circle = (cx,cy,cz, plane='xy', n=50)=>{
+        const xs=[],ys=[],zs=[];
+        for(let i=0;i<=n;i++){
+          const a = i*2*Math.PI/n;
+          let x=cx, y=cy, z=cz;
+          if(plane==='xy'){ x = cx + CLOUD_RADIUS*Math.cos(a); y = cy + CLOUD_RADIUS*Math.sin(a); }
+          if(plane==='xz'){ x = cx + CLOUD_RADIUS*Math.cos(a); z = cz + CLOUD_RADIUS*Math.sin(a); }
+          if(plane==='yz'){ y = cy + CLOUD_RADIUS*Math.cos(a); z = cz + CLOUD_RADIUS*Math.sin(a); }
+          xs.push(x); ys.push(y); zs.push(z);
+        }
+        return {xs,ys,zs};
+      };
+      smokeCenters.forEach(sc=>{
+        const c1 = circle(sc[0],sc[1],sc[2],'xy');
+        const c2 = circle(sc[0],sc[1],sc[2],'xz');
+        const c3 = circle(sc[0],sc[1],sc[2],'yz');
+        updates.x.push(c1.xs); updates.y.push(c1.ys); updates.z.push(c1.zs); updates.traces.push(traceIndex++);
+        updates.x.push(c2.xs); updates.y.push(c2.ys); updates.z.push(c2.zs); updates.traces.push(traceIndex++);
+        updates.x.push(c3.xs); updates.y.push(c3.ys); updates.z.push(c3.zs); updates.traces.push(traceIndex++);
+      });
+      // 若烟雾trace总数比当前少，清空多余trace
+      const smokeTracesTotal = fig3dTraces.smoke;
+      const usedSmokeTraces = smokeCenters.length*3;
+      for(let k=usedSmokeTraces; k<smokeTracesTotal; k++){
+        updates.x.push([]); updates.y.push([]); updates.z.push([]); updates.traces.push(traceIndex++);
+      }
+
+      // 视线（合并为2条多段线）
+      let totalLines=0, obscuredLines=0, fullyCount=0;
+      let visMerged = {x:[],y:[],z:[]}, hidMerged={x:[],y:[],z:[]};
+      if(sim.showLOS){
+        sim.missiles.forEach(m=>{
+          const pm = missilePosAt(m, t);
+          const los = computeLOSForMissile(pm, smokeCenters);
+          visMerged.x.push(...los.vis.x); visMerged.y.push(...los.vis.y); visMerged.z.push(...los.vis.z);
+          hidMerged.x.push(...los.hid.x); hidMerged.y.push(...los.hid.y); hidMerged.z.push(...los.hid.z);
+          totalLines += los.total;
+          obscuredLines += los.obscured;
+          if(los.fully) fullyCount++;
+        });
+      }
+      // 可见
+      updates.x.push(visMerged.x); updates.y.push(visMerged.y); updates.z.push(visMerged.z); updates.traces.push(traceIndex++);
+      // 遮蔽
+      updates.x.push(hidMerged.x); updates.y.push(hidMerged.y); updates.z.push(hidMerged.z); updates.traces.push(traceIndex++);
+
+      Plotly.update('plot3d', {x:updates.x, y:updates.y, z:updates.z}, {}, updates.traces);
+
+      // 2D：更新点/轨迹与烟雾圆截面（用shapes）
+      update2DViews(t, smokeCenters);
+
+      // 状态
+      const visRatio = totalLines>0 ? ((totalLines - obscuredLines)/totalLines) : 1;
+      const status = sim.showLOS ? `可见连线: ${totalLines - obscuredLines}/${totalLines} (${(visRatio*100).toFixed(1)}%)` : '';
+      setStatus(status);
+      
+      // 更新当前遮挡状态
+      updateCurrentObstructionStatus(t);
+    }
+
+    function update2DViews(t, smokeCenters){
+      // 先清空3个图的动态trace
+      ['plotXY','plotXZ','plotYZ'].forEach(id => Plotly.react(id, [], document.getElementById(id).layout));
+
+      // 目标轮廓（重画）
+      init2D('plotXY','X(m)','Y(m)');
+      init2D('plotXZ','X(m)','Z(m)');
+      init2D('plotYZ','Y(m)','Z(m)');
+
+      // 导弹/无人机/炸弹点与轨迹
+      const addPt = (div, p, color, symbol='circle', size=6)=>{
+        Plotly.addTraces(div, [{type:'scatter', mode:'markers', x:[p[0]], y:[p[1]], marker:{color, size, symbol}}]);
+      };
+      const addLine = (div, xs, ys, color, dash='solid', width=2)=>{
+        Plotly.addTraces(div, [{type:'scatter', mode:'lines', x:xs, y:ys, line:{color, width, dash}}]);
+      };
+
+      sim.missiles.forEach(m=>{
+        const p3 = missilePosAt(m,t);
+        // XY
+        addPt('plotXY', [p3[0], p3[1]], m.color, 'circle', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = missilePosAt(m,ti);
+            xs.push(pi[0]); ys.push(pi[1]);
+          }
+          addLine('plotXY', xs, ys, m.color, 'solid', 2);
+        }
+        // XZ
+        addPt('plotXZ', [p3[0], p3[2]], m.color, 'circle', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = missilePosAt(m,ti);
+            xs.push(pi[0]); ys.push(pi[2]);
+          }
+          addLine('plotXZ', xs, ys, m.color, 'solid', 2);
+        }
+        // YZ
+        addPt('plotYZ', [p3[1], p3[2]], m.color, 'circle', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = missilePosAt(m,ti);
+            xs.push(pi[1]); ys.push(pi[2]);
+          }
+          addLine('plotYZ', xs, ys, m.color, 'solid', 2);
+        }
+      });
+
+      sim.uavs.forEach(u=>{
+        const p3 = uavPosAt(u,t);
+        // XY
+        addPt('plotXY', [p3[0], p3[1]], u.color, 'square', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = uavPosAt(u,ti);
+            xs.push(pi[0]); ys.push(pi[1]);
+          }
+          addLine('plotXY', xs, ys, u.color, 'solid', 2);
+        }
+        // XZ
+        addPt('plotXZ', [p3[0], p3[2]], u.color, 'square', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = uavPosAt(u,ti);
+            xs.push(pi[0]); ys.push(pi[2]);
+          }
+          addLine('plotXZ', xs, ys, u.color, 'solid', 2);
+        }
+        // YZ
+        addPt('plotYZ', [p3[1], p3[2]], u.color, 'square', 6);
+        if(sim.showTrails){
+          const xs=[], ys=[];
+          const N = Math.max(2, Math.floor(t/sim.dt));
+          for(let i=0;i<N;i++){
+            const ti = i*sim.dt;
+            const pi = uavPosAt(u,ti);
+            xs.push(pi[1]); ys.push(pi[2]);
+          }
+          addLine('plotYZ', xs, ys, u.color, 'solid', 2);
+        }
+
+        // 炸弹投放中的点与轨迹
+        u.bombs.forEach(b=>{
+          const st = bombStateAt(u,b,t);
+          if(st.bombActive){
+            // XY
+            addPt('plotXY', [st.bombPos[0], st.bombPos[1]], 'purple', 'diamond', 5);
+            // XZ
+            addPt('plotXZ', [st.bombPos[0], st.bombPos[2]], 'purple', 'diamond', 5);
+            // YZ
+            addPt('plotYZ', [st.bombPos[1], st.bombPos[2]], 'purple', 'diamond', 5);
+          }
+          if(sim.showTrails){
+            const vU = vecScale(u.dirUav, u.speed);
+            const t0 = b.drop, t1 = Math.min(t, b.explodeTime);
+            if(t1>t0){
+              const xsXY=[], ysXY=[], xsXZ=[], ysXZ=[], xsYZ=[], ysYZ=[];
+              const N = Math.max(5, Math.floor((t1-t0)/sim.dt));
+              for(let i=0;i<=N;i++){
+                const ti = t0 + (t1-t0)*i/N;
+                const ft = ti - b.drop;
+                let p = vecAdd(b.dropPos, vecScale(vU, ft));
+                p[2] = p[2] - 0.5*G*ft*ft;
+                xsXY.push(p[0]); ysXY.push(p[1]);
+                xsXZ.push(p[0]); ysXZ.push(p[2]);
+                xsYZ.push(p[1]); ysYZ.push(p[2]);
+              }
+              addLine('plotXY', xsXY, ysXY, 'purple', 'dot', 1.5);
+              addLine('plotXZ', xsXZ, ysXZ, 'purple', 'dot', 1.5);
+              addLine('plotYZ', xsYZ, ysYZ, 'purple', 'dot', 1.5);
+            }
+          }
+        });
+      });
+
+      // 烟雾圆截面（shapes）
+      if(sim.showSmoke){
+        const shapesXY=[], shapesXZ=[], shapesYZ=[];
+        smokeCenters.forEach(sc=>{
+          shapesXY.push(circleShapeSpec(sc[0], sc[1], CLOUD_RADIUS));
+          shapesXZ.push(circleShapeSpec(sc[0], sc[2], CLOUD_RADIUS));
+          shapesYZ.push(circleShapeSpec(sc[1], sc[2], CLOUD_RADIUS));
+        });
+        Plotly.relayout(fig2d.XY, {shapes: (fig2d.XY.layout.shapes||[]).concat(shapesXY)});
+        Plotly.relayout(fig2d.XZ, {shapes: (fig2d.XZ.layout.shapes||[]).concat(shapesXZ)});
+        Plotly.relayout(fig2d.YZ, {shapes: (fig2d.YZ.layout.shapes||[]).concat(shapesYZ)});
+      }
+
+      // 添加2D视线绘制
+      if(sim.showLOS) {
+        draw2DLineOfSight(t, smokeCenters);
+      }
+    }
+
+    function draw2DLineOfSight(t, smokeCenters) {
+      sim.missiles.forEach(missile => {
+        const missilePos = missilePosAt(missile, t);
+        const los = computeLOSForMissile(missilePos, smokeCenters);
+        
+        // 投影到三个平面
+        const visibleLinesXY = { x: [], y: [] };
+        const hiddenLinesXY = { x: [], y: [] };
+        const visibleLinesXZ = { x: [], y: [] };
+        const hiddenLinesXZ = { x: [], y: [] };
+        const visibleLinesYZ = { x: [], y: [] };
+        const hiddenLinesYZ = { x: [], y: [] };
+        
+        // 处理可见视线
+        for(let i = 0; i < los.vis.x.length; i += 3) {
+          if(los.vis.x[i] !== null && los.vis.x[i+1] !== null) {
+            // XY平面
+            visibleLinesXY.x.push(los.vis.x[i], los.vis.x[i+1], null);
+            visibleLinesXY.y.push(los.vis.y[i], los.vis.y[i+1], null);
+            // XZ平面
+            visibleLinesXZ.x.push(los.vis.x[i], los.vis.x[i+1], null);
+            visibleLinesXZ.y.push(los.vis.z[i], los.vis.z[i+1], null);
+            // YZ平面
+            visibleLinesYZ.x.push(los.vis.y[i], los.vis.y[i+1], null);
+            visibleLinesYZ.y.push(los.vis.z[i], los.vis.z[i+1], null);
+          }
+        }
+        
+        // 处理被遮挡视线
+        for(let i = 0; i < los.hid.x.length; i += 3) {
+          if(los.hid.x[i] !== null && los.hid.x[i+1] !== null) {
+            // XY平面
+            hiddenLinesXY.x.push(los.hid.x[i], los.hid.x[i+1], null);
+            hiddenLinesXY.y.push(los.hid.y[i], los.hid.y[i+1], null);
+            // XZ平面
+            hiddenLinesXZ.x.push(los.hid.x[i], los.hid.x[i+1], null);
+            hiddenLinesXZ.y.push(los.hid.z[i], los.hid.z[i+1], null);
+            // YZ平面
+            hiddenLinesYZ.x.push(los.hid.y[i], los.hid.y[i+1], null);
+            hiddenLinesYZ.y.push(los.hid.z[i], los.hid.z[i+1], null);
+          }
+        }
+        
+        // 添加视线trace到各个图
+        if(visibleLinesXY.x.length > 0) {
+          Plotly.addTraces('plotXY', [{type:'scatter', mode:'lines', x:visibleLinesXY.x, y:visibleLinesXY.y, line:{color:'red', width:1}}]);
+        }
+        if(hiddenLinesXY.x.length > 0) {
+          Plotly.addTraces('plotXY', [{type:'scatter', mode:'lines', x:hiddenLinesXY.x, y:hiddenLinesXY.y, line:{color:'lime', width:2}}]);
+        }
+        
+        if(visibleLinesXZ.x.length > 0) {
+          Plotly.addTraces('plotXZ', [{type:'scatter', mode:'lines', x:visibleLinesXZ.x, y:visibleLinesXZ.y, line:{color:'red', width:1}}]);
+        }
+        if(hiddenLinesXZ.x.length > 0) {
+          Plotly.addTraces('plotXZ', [{type:'scatter', mode:'lines', x:hiddenLinesXZ.x, y:hiddenLinesXZ.y, line:{color:'lime', width:2}}]);
+        }
+        
+        if(visibleLinesYZ.x.length > 0) {
+          Plotly.addTraces('plotYZ', [{type:'scatter', mode:'lines', x:visibleLinesYZ.x, y:visibleLinesYZ.y, line:{color:'red', width:1}}]);
+        }
+        if(hiddenLinesYZ.x.length > 0) {
+          Plotly.addTraces('plotYZ', [{type:'scatter', mode:'lines', x:hiddenLinesYZ.x, y:hiddenLinesYZ.y, line:{color:'lime', width:2}}]);
+        }
+      });
+    }
+
+    function circleShapeSpec(cx, cy, r){
+      return {
+        type:'circle', xref:'x', yref:'y',
+        x0: cx - r, x1: cx + r, y0: cy - r, y1: cy + r,
+        line:{color:'gray', width:2}, fillcolor:'rgba(128,128,128,0.3)', opacity:0.5
+      };
+    }
+
+    // ---------------- 状态控制 ----------------
+    function setStatus(text){
+      document.getElementById('statusLabel').textContent = text||'';
+    }
+
+    // ---------------- 启动：默认应用并显示 ----------------
+    applySettings();
+    initPlots();
+    updateAtTime(0);
+  </script>
+</body>
+</html>
